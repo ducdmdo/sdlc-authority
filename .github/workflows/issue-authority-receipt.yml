@@ -1,0 +1,304 @@
+name: Issue Authority Receipt
+
+on:
+  repository_dispatch:
+    types:
+      - authority_request
+
+permissions: {}
+
+concurrency:
+  group: authority-${{ github.event.client_payload.request_id }}
+  cancel-in-progress: false
+
+jobs:
+  verify-private:
+    name: Human-approved private verification
+    if: >-
+      github.actor == 'github-actions[bot]' &&
+      github.event_name == 'repository_dispatch' &&
+      github.event.action == 'authority_request' &&
+      github.repository == 'ducdmdo/sdlc-authority' &&
+      github.ref == 'refs/heads/main' &&
+      github.ref_protected
+    environment: human-approval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout protected authority metadata
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Bind protected environment approval
+        id: approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          AUTHORITY_RUN_ID: ${{ github.run_id }}
+          AUTHORITY_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import urllib.request
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          base = "https://api.github.com/repos/" + os.environ["GH_REPOSITORY"]
+          def fetch(path):
+              request = urllib.request.Request(base + path, headers=headers)
+              with urllib.request.urlopen(request) as response:
+                  return json.load(response)
+
+          environment = fetch("/environments/human-approval")
+          rules = environment.get("protection_rules", [])
+          reviewer_rules = [r for r in rules if r.get("type") == "required_reviewers"]
+          reviewers = reviewer_rules[0].get("reviewers", []) if len(reviewer_rules) == 1 else []
+          expected_reviewer = {
+              "type": "User",
+              "reviewer": {"id": 28857207, "login": "ducdmdo", "type": "User"},
+          }
+          normalized_reviewers = [
+              {
+                  "type": item.get("type"),
+                  "reviewer": {
+                      "id": item.get("reviewer", {}).get("id"),
+                      "login": item.get("reviewer", {}).get("login"),
+                      "type": item.get("reviewer", {}).get("type"),
+                  },
+              }
+              for item in reviewers
+          ]
+          branch_policy = environment.get("deployment_branch_policy", {})
+          config = {
+              "schemaVersion": "github-environment-config-v1",
+              "name": environment.get("name"),
+              "preventSelfReview": reviewer_rules[0].get("prevent_self_review")
+              if len(reviewer_rules) == 1 else None,
+              "reviewers": normalized_reviewers,
+              "protectedBranches": branch_policy.get("protected_branches"),
+              "customBranchPolicies": branch_policy.get("custom_branch_policies"),
+          }
+          expected_config = {
+              "schemaVersion": "github-environment-config-v1",
+              "name": "human-approval",
+              "preventSelfReview": True,
+              "reviewers": [expected_reviewer],
+              "protectedBranches": True,
+              "customBranchPolicies": False,
+          }
+          if config != expected_config:
+              raise SystemExit("protected environment configuration is invalid")
+          approvals = fetch(
+              "/actions/runs/" + os.environ["AUTHORITY_RUN_ID"] + "/approvals"
+          )
+          matches = [
+              review for review in approvals
+              if review.get("state") == "approved"
+              and review.get("user", {}).get("id") == 28857207
+              and review.get("user", {}).get("login") == "ducdmdo"
+              and review.get("user", {}).get("type") == "User"
+              and any(
+                  env.get("name") == "human-approval"
+                  for env in review.get("environments", [])
+              )
+          ]
+          if not matches:
+              raise SystemExit("protected environment approval is missing")
+          review = {
+              "schemaVersion": "github-environment-review-v1",
+              "runId": os.environ["AUTHORITY_RUN_ID"],
+              "runAttempt": os.environ["AUTHORITY_RUN_ATTEMPT"],
+              "environment": "human-approval",
+              "reviewer": {"id": 28857207, "login": "ducdmdo", "type": "User"},
+              "state": "approved",
+          }
+          def digest(value):
+              encoded = json.dumps(
+                  value, sort_keys=True, separators=(",", ":")
+              ).encode()
+              return "sha256:" + hashlib.sha256(encoded).hexdigest()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("config_digest=" + digest(config) + "\n")
+              output.write("review_digest=" + digest(review) + "\n")
+          PY
+      - name: Validate public request
+        env:
+          REQUEST_ID: ${{ github.event.client_payload.request_id }}
+          NONCE: ${{ github.event.client_payload.nonce }}
+          SUBJECT_COMMITMENT: ${{ github.event.client_payload.subject_commitment }}
+          POLICY_COMMITMENT: ${{ github.event.client_payload.policy_commitment }}
+          REQUESTED_AT: ${{ github.event.client_payload.requested_at }}
+        run: |
+          python3 scripts/authority_contract.py request \
+            --request-id "$REQUEST_ID" \
+            --nonce "$NONCE" \
+            --subject-commitment "$SUBJECT_COMMITMENT" \
+            --policy-commitment "$POLICY_COMMITMENT" \
+            --requested-at "$REQUESTED_AT" \
+            --output authority-request.json
+      - name: Verify exact private source without network
+        id: verify
+        shell: bash
+        env:
+          SOURCE_REPOSITORY: ${{ secrets.SOURCE_REPOSITORY }}
+          SOURCE_REVISION: ${{ secrets.SOURCE_REVISION }}
+          SOURCE_DEPLOY_KEY: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          SOURCE_COMMITMENT_SALT: ${{ secrets.SOURCE_COMMITMENT_SALT }}
+          SUBJECT_COMMITMENT: ${{ github.event.client_payload.subject_commitment }}
+        run: |
+          set -euo pipefail
+          source_dir="$(mktemp -d)"
+          credential_dir="$(mktemp -d)"
+          private_log="$RUNNER_TEMP/private-verification.log"
+          cleanup() {
+            rm -f "$private_log"
+            rm -rf "$source_dir" "$credential_dir"
+          }
+          trap cleanup EXIT
+          python3 - <<'PY'
+          import hashlib
+          import hmac
+          import os
+          import re
+
+          repository = os.environ.get("SOURCE_REPOSITORY", "")
+          revision = os.environ.get("SOURCE_REVISION", "")
+          deploy_key = os.environ.get("SOURCE_DEPLOY_KEY", "")
+          salt = os.environ.get("SOURCE_COMMITMENT_SALT", "")
+          supplied = os.environ.get("SUBJECT_COMMITMENT", "")
+          valid = (
+              re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+              and re.fullmatch(r"[0-9a-f]{40}", revision)
+              and "PRIVATE KEY" in deploy_key
+              and 32 <= len(salt) <= 256
+          )
+          if not valid:
+              raise SystemExit("private verification configuration is invalid")
+          preimage = b"\0".join(
+              (
+                  b"sdlc-authority-subject-v1",
+                  salt.encode(),
+                  repository.encode(),
+                  revision.encode(),
+              )
+          )
+          expected = "sha256:" + hashlib.sha256(preimage).hexdigest()
+          if not hmac.compare_digest(supplied, expected):
+              raise SystemExit("private verification commitment mismatch")
+          PY
+          if ! command -v bwrap >/dev/null 2>&1; then
+            echo "private verification isolation is unavailable" >&2
+            exit 1
+          fi
+          key_file="$credential_dir/source-key"
+          known_hosts="$credential_dir/known-hosts"
+          printf '%s\n' "$SOURCE_DEPLOY_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          printf '%s\n' \
+            'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            > "$known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts -o LogLevel=ERROR"
+          git -C "$source_dir" init --quiet
+          git -C "$source_dir" remote add origin \
+            "git@github.com:${SOURCE_REPOSITORY}.git"
+          if ! git -C "$source_dir" fetch --quiet --depth=1 origin \
+            "$SOURCE_REVISION" >"$private_log" 2>&1; then
+            echo "private verification fetch failed" >&2
+            exit 1
+          fi
+          git -C "$source_dir" checkout --quiet --detach FETCH_HEAD \
+            >>"$private_log" 2>&1
+          actual_revision="$(git -C "$source_dir" rev-parse HEAD)"
+          if [ "$actual_revision" != "$SOURCE_REVISION" ]; then
+            echo "private verification revision mismatch" >&2
+            exit 1
+          fi
+          rm -f "$key_file" "$known_hosts"
+          unset SOURCE_DEPLOY_KEY SOURCE_COMMITMENT_SALT GIT_SSH_COMMAND
+          unset SOURCE_REPOSITORY SOURCE_REVISION
+          if [ ! -x "$source_dir/.sdlc-authority/verify" ]; then
+            echo "private verification entrypoint is unavailable" >&2
+            exit 1
+          fi
+          if ! bwrap \
+            --unshare-all \
+            --die-with-parent \
+            --new-session \
+            --ro-bind "$source_dir" /workspace \
+            --ro-bind /usr /usr \
+            --ro-bind /bin /bin \
+            --ro-bind /lib /lib \
+            --ro-bind-try /lib64 /lib64 \
+            --proc /proc \
+            --dev /dev \
+            --tmpfs /tmp \
+            --chdir /workspace \
+            --setenv HOME /tmp \
+            --setenv PATH /usr/bin:/bin \
+            /workspace/.sdlc-authority/verify \
+            >"$private_log" 2>&1; then
+            echo "private verification failed" >&2
+            exit 1
+          fi
+      - name: Reconstruct and validate opaque request
+        env:
+          REQUEST_ID: ${{ github.event.client_payload.request_id }}
+          NONCE: ${{ github.event.client_payload.nonce }}
+          SUBJECT_COMMITMENT: ${{ github.event.client_payload.subject_commitment }}
+          POLICY_COMMITMENT: ${{ github.event.client_payload.policy_commitment }}
+          REQUESTED_AT: ${{ github.event.client_payload.requested_at }}
+        run: |
+          python3 scripts/authority_contract.py request \
+            --request-id "$REQUEST_ID" \
+            --nonce "$NONCE" \
+            --subject-commitment "$SUBJECT_COMMITMENT" \
+            --policy-commitment "$POLICY_COMMITMENT" \
+            --requested-at "$REQUESTED_AT" \
+            --output authority-request.json
+      - name: Issue short-lived canonical decision
+        env:
+          RELAY_RUN_ID: ${{ github.event.client_payload.relay_run_id }}
+          RELAY_RUN_ATTEMPT: ${{ github.event.client_payload.relay_run_attempt }}
+          APPROVAL_CONFIG_DIGEST: ${{ steps.approval.outputs.config_digest }}
+          APPROVAL_REVIEW_DIGEST: ${{ steps.approval.outputs.review_digest }}
+          AUTHORITY_COMMIT_SHA: ${{ github.sha }}
+          AUTHORITY_RUN_ID: ${{ github.run_id }}
+          AUTHORITY_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          issued_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 scripts/authority_contract.py issue \
+            --request authority-request.json \
+            --relay-run-id "$RELAY_RUN_ID" \
+            --relay-run-attempt "$RELAY_RUN_ATTEMPT" \
+            --authority-commit-sha "$AUTHORITY_COMMIT_SHA" \
+            --authority-run-id "$AUTHORITY_RUN_ID" \
+            --authority-run-attempt "$AUTHORITY_RUN_ATTEMPT" \
+            --approval-config-digest "$APPROVAL_CONFIG_DIGEST" \
+            --approval-review-digest "$APPROVAL_REVIEW_DIGEST" \
+            --issued-at "$issued_at" \
+            --output authority-decision.json
+          python3 scripts/authority_contract.py validate \
+            --kind decision \
+            --artifact authority-decision.json
+      - name: Attest authority decision
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: authority-decision.json
+      - name: Upload short-retention decision
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: authority-decision
+          path: authority-decision.json
+          if-no-files-found: error
+          retention-days: 1

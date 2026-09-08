@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+authority-decision.json
+authority-request.json

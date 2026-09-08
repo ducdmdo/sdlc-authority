@@ -1,0 +1,101 @@
+name: Relay Authority Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Opaque request identifier
+        required: true
+        type: string
+      nonce:
+        description: Opaque replay-prevention nonce
+        required: true
+        type: string
+      subject_commitment:
+        description: Opaque subject commitment
+        required: true
+        type: string
+      policy_commitment:
+        description: Opaque policy commitment
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  relay:
+    name: Validate and relay opaque request
+    if: github.actor == 'ducdmdo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout protected metadata
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Create validated request
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          NONCE: ${{ inputs.nonce }}
+          SUBJECT_COMMITMENT: ${{ inputs.subject_commitment }}
+          POLICY_COMMITMENT: ${{ inputs.policy_commitment }}
+        run: |
+          requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 scripts/authority_contract.py request \
+            --request-id "$REQUEST_ID" \
+            --nonce "$NONCE" \
+            --subject-commitment "$SUBJECT_COMMITMENT" \
+            --policy-commitment "$POLICY_COMMITMENT" \
+            --requested-at "$requested_at" \
+            --output authority-request.json
+      - name: Dispatch bot-owned authority run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          RELAY_RUN_ID: ${{ github.run_id }}
+          RELAY_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          request = json.loads(Path("authority-request.json").read_text())
+          client_payload = {
+              "request_id": request["requestId"],
+              "nonce": request["nonce"],
+              "subject_commitment": request["subjectCommitment"],
+              "policy_commitment": request["policyCommitment"],
+              "requested_at": request["requestedAt"],
+              "relay_run_id": os.environ["RELAY_RUN_ID"],
+              "relay_run_attempt": os.environ["RELAY_RUN_ATTEMPT"],
+          }
+          payload = json.dumps(
+              {
+                  "event_type": "authority_request",
+                  "client_payload": client_payload,
+              }
+          ).encode()
+          url = (
+              "https://api.github.com/repos/"
+              + os.environ["GH_REPOSITORY"]
+              + "/dispatches"
+          )
+          api_request = urllib.request.Request(
+              url,
+              data=payload,
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(api_request) as response:
+              if response.status != 204:
+                  raise SystemExit("authority dispatch was not accepted")
+          PY

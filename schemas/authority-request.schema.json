@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ducdmdo/sdlc-authority/schemas/authority-request.schema.json",
+  "title": "Opaque authority request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "requestId",
+    "nonce",
+    "subjectCommitment",
+    "policyCommitment",
+    "requestedAt"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0"},
+    "requestId": {
+      "type": "string",
+      "pattern": "^req-[a-z0-9](?:[a-z0-9-]{6,62}[a-z0-9])$"
+    },
+    "nonce": {
+      "type": "string",
+      "pattern": "^nonce-[a-z0-9]{16,64}$"
+    },
+    "subjectCommitment": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "policyCommitment": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "requestedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  }
+}
