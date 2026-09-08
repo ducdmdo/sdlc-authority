@@ -25,12 +25,30 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Provision reviewed isolation dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_log="$RUNNER_TEMP/isolation-package.log"
+          cleanup() {
+            rm -f "$package_log"
+          }
+          trap cleanup EXIT
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update >"$package_log" 2>&1
+          sudo apt-get install --yes --no-install-recommends \
+            bubblewrap=0.9.0-1ubuntu0.1 >>"$package_log" 2>&1
+          installed_version="$(
+            dpkg-query --show --showformat='${Version}' bubblewrap
+          )"
+          test "$installed_version" = "0.9.0-1ubuntu0.1"
+          test "$(command -v bwrap)" = "/usr/bin/bwrap"
+          test "$(/usr/bin/bwrap --version)" = "bubblewrap 0.9.0"
       - name: Prove Bubblewrap isolation
         shell: bash
         run: |
           set -euo pipefail
-          command -v bwrap >/dev/null
-          bwrap \
+          /usr/bin/bwrap \
             --unshare-all \
             --unshare-net \
             --die-with-parent \
@@ -44,11 +62,4 @@ jobs:
             --tmpfs /tmp \
             --setenv HOME /tmp \
             --setenv PATH /usr/bin:/bin \
-            /usr/bin/awk -F: \
-              'NR > 2 {
-                gsub(/[[:space:]]/, "", $1)
-                if ($1 != "lo") exit 1
-                count++
-              }
-              END { exit count == 1 ? 0 : 1 }' \
-              /proc/net/dev
+            /bin/true

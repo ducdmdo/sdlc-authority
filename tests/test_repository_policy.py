@@ -43,12 +43,18 @@ class RepositoryPolicyTest(unittest.TestCase):
             "actions/attest-build-provenance",
             "SOURCE_DEPLOY_KEY",
             "SOURCE_COMMITMENT_SALT",
+            "bubblewrap=0.9.0-1ubuntu0.1",
+            'test "$(command -v bwrap)" = "/usr/bin/bwrap"',
+            'test "$(/usr/bin/bwrap --version)" = "bubblewrap 0.9.0"',
             "--unshare-all",
             "private-verification.log",
         )
         for control in required:
             with self.subTest(control=control):
                 self.assertIn(control, workflow)
+        provision = workflow.index("Provision reviewed isolation dependency")
+        private_verify = workflow.index("Verify exact private source")
+        self.assertLess(provision, private_verify)
 
     def test_authority_workflow_binds_exact_environment(self) -> None:
         workflow = (WORKFLOWS / "issue-authority-receipt.yml").read_text(
@@ -68,6 +74,7 @@ class RepositoryPolicyTest(unittest.TestCase):
             "github.ref_protected",
             "runs-on: ubuntu-24.04",
             "permissions: {}",
+            "bubblewrap=0.9.0-1ubuntu0.1",
             "--unshare-all",
             "--unshare-net",
         )

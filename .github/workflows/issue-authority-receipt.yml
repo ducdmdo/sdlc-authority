@@ -155,6 +155,25 @@ jobs:
             --policy-commitment "$POLICY_COMMITMENT" \
             --requested-at "$REQUESTED_AT" \
             --output authority-request.json
+      - name: Provision reviewed isolation dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_log="$RUNNER_TEMP/isolation-package.log"
+          cleanup() {
+            rm -f "$package_log"
+          }
+          trap cleanup EXIT
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update >"$package_log" 2>&1
+          sudo apt-get install --yes --no-install-recommends \
+            bubblewrap=0.9.0-1ubuntu0.1 >>"$package_log" 2>&1
+          installed_version="$(
+            dpkg-query --show --showformat='${Version}' bubblewrap
+          )"
+          test "$installed_version" = "0.9.0-1ubuntu0.1"
+          test "$(command -v bwrap)" = "/usr/bin/bwrap"
+          test "$(/usr/bin/bwrap --version)" = "bubblewrap 0.9.0"
       - name: Verify exact private source without network
         id: verify
         shell: bash
@@ -205,10 +224,6 @@ jobs:
           if not hmac.compare_digest(supplied, expected):
               raise SystemExit("private verification commitment mismatch")
           PY
-          if ! command -v bwrap >/dev/null 2>&1; then
-            echo "private verification isolation is unavailable" >&2
-            exit 1
-          fi
           key_file="$credential_dir/source-key"
           known_hosts="$credential_dir/known-hosts"
           printf '%s\n' "$SOURCE_DEPLOY_KEY" > "$key_file"
@@ -239,7 +254,7 @@ jobs:
             echo "private verification entrypoint is unavailable" >&2
             exit 1
           fi
-          if ! bwrap \
+          if ! /usr/bin/bwrap \
             --unshare-all \
             --die-with-parent \
             --new-session \
