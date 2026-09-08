@@ -33,6 +33,9 @@ class RepositoryPolicyTest(unittest.TestCase):
             "github.event_name == 'repository_dispatch'",
             "/actions/runs/",
             "/approvals",
+            "can_admins_bypass",
+            '"canAdminsBypass": False',
+            'env.get("id") == 21443284760',
             "28857207",
             "attestations: write",
             "id-token: write",
@@ -46,6 +49,33 @@ class RepositoryPolicyTest(unittest.TestCase):
         for control in required:
             with self.subTest(control=control):
                 self.assertIn(control, workflow)
+
+    def test_authority_workflow_binds_exact_environment(self) -> None:
+        workflow = (WORKFLOWS / "issue-authority-receipt.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertGreaterEqual(workflow.count("21443284760"), 3)
+        self.assertIn('"environmentId": environment.get("id")', workflow)
+        self.assertIn('"environmentId": 21443284760', workflow)
+        self.assertIn('"canAdminsBypass": environment.get(', workflow)
+
+    def test_isolation_diagnostic_is_protected_and_secret_free(self) -> None:
+        workflow = (WORKFLOWS / "isolation-diagnostic.yml").read_text(
+            encoding="utf-8"
+        )
+        required = (
+            "github.ref == 'refs/heads/main'",
+            "github.ref_protected",
+            "runs-on: ubuntu-24.04",
+            "permissions: {}",
+            "--unshare-all",
+            "--unshare-net",
+        )
+        for control in required:
+            with self.subTest(control=control):
+                self.assertIn(control, workflow)
+        self.assertNotIn("secrets.", workflow)
+        self.assertNotIn("environment:", workflow)
 
     def test_workflows_do_not_use_dangerous_triggers(self) -> None:
         forbidden = ("pull_request_target:", "issue_comment:")

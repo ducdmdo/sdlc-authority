@@ -82,7 +82,9 @@ jobs:
           branch_policy = environment.get("deployment_branch_policy", {})
           config = {
               "schemaVersion": "github-environment-config-v1",
+              "environmentId": environment.get("id"),
               "name": environment.get("name"),
+              "canAdminsBypass": environment.get("can_admins_bypass"),
               "preventSelfReview": reviewer_rules[0].get("prevent_self_review")
               if len(reviewer_rules) == 1 else None,
               "reviewers": normalized_reviewers,
@@ -91,7 +93,9 @@ jobs:
           }
           expected_config = {
               "schemaVersion": "github-environment-config-v1",
+              "environmentId": 21443284760,
               "name": "human-approval",
+              "canAdminsBypass": False,
               "preventSelfReview": True,
               "reviewers": [expected_reviewer],
               "protectedBranches": True,
@@ -109,7 +113,8 @@ jobs:
               and review.get("user", {}).get("login") == "ducdmdo"
               and review.get("user", {}).get("type") == "User"
               and any(
-                  env.get("name") == "human-approval"
+                  env.get("id") == 21443284760
+                  and env.get("name") == "human-approval"
                   for env in review.get("environments", [])
               )
           ]
@@ -119,7 +124,10 @@ jobs:
               "schemaVersion": "github-environment-review-v1",
               "runId": os.environ["AUTHORITY_RUN_ID"],
               "runAttempt": os.environ["AUTHORITY_RUN_ATTEMPT"],
-              "environment": "human-approval",
+              "environment": {
+                  "id": 21443284760,
+                  "name": "human-approval",
+              },
               "reviewer": {"id": 28857207, "login": "ducdmdo", "type": "User"},
               "state": "approved",
           }

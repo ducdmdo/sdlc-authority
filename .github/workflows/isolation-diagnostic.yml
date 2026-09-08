@@ -1,0 +1,48 @@
+name: Isolation Diagnostic
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  bubblewrap:
+    name: bubblewrap-isolation
+    if: >-
+      github.repository == 'ducdmdo/sdlc-authority' &&
+      github.ref == 'refs/heads/main' &&
+      github.ref_protected
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout protected authority metadata
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Prove Bubblewrap isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bwrap >/dev/null
+          bwrap \
+            --unshare-all \
+            --unshare-net \
+            --die-with-parent \
+            --new-session \
+            --ro-bind /usr /usr \
+            --ro-bind /bin /bin \
+            --ro-bind /lib /lib \
+            --ro-bind-try /lib64 /lib64 \
+            --proc /proc \
+            --dev /dev \
+            --tmpfs /tmp \
+            --setenv HOME /tmp \
+            --setenv PATH /usr/bin:/bin \
+            /bin/sh -c \
+              'test "$(readlink /proc/1/ns/net)" = "$(readlink /proc/self/ns/net)"'
