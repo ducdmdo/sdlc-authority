@@ -174,6 +174,7 @@ jobs:
           test "$installed_version" = "0.9.0-1ubuntu0.1"
           test "$(command -v bwrap)" = "/usr/bin/bwrap"
           test "$(/usr/bin/bwrap --version)" = "bubblewrap 0.9.0"
+          sudo --non-interactive true
       - name: Verify exact private source without network
         id: verify
         shell: bash
@@ -254,8 +255,9 @@ jobs:
             echo "private verification entrypoint is unavailable" >&2
             exit 1
           fi
-          if ! /usr/bin/bwrap \
+          if ! sudo --non-interactive /usr/bin/bwrap \
             --unshare-all \
+            --unshare-net \
             --die-with-parent \
             --new-session \
             --ro-bind "$source_dir" /workspace \

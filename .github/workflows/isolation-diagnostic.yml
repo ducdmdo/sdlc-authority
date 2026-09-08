@@ -44,11 +44,12 @@ jobs:
           test "$installed_version" = "0.9.0-1ubuntu0.1"
           test "$(command -v bwrap)" = "/usr/bin/bwrap"
           test "$(/usr/bin/bwrap --version)" = "bubblewrap 0.9.0"
+          sudo --non-interactive true
       - name: Prove Bubblewrap isolation
         shell: bash
         run: |
           set -euo pipefail
-          /usr/bin/bwrap \
+          sudo --non-interactive /usr/bin/bwrap \
             --unshare-all \
             --unshare-net \
             --die-with-parent \
