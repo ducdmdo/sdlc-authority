@@ -44,5 +44,11 @@ jobs:
             --tmpfs /tmp \
             --setenv HOME /tmp \
             --setenv PATH /usr/bin:/bin \
-            /bin/sh -c \
-              'test "$(readlink /proc/1/ns/net)" = "$(readlink /proc/self/ns/net)"'
+            /usr/bin/awk -F: \
+              'NR > 2 {
+                gsub(/[[:space:]]/, "", $1)
+                if ($1 != "lo") exit 1
+                count++
+              }
+              END { exit count == 1 ? 0 : 1 }' \
+              /proc/net/dev
