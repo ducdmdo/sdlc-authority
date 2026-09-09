@@ -47,6 +47,8 @@ class RepositoryPolicyTest(unittest.TestCase):
             'test "$(command -v bwrap)" = "/usr/bin/bwrap"',
             'test "$(/usr/bin/bwrap --version)" = "bubblewrap 0.9.0"',
             "sudo --non-interactive /usr/bin/bwrap",
+            'sudo chgrp 0 "$source_dir"',
+            'chmod 0750 "$source_dir"',
             "--unshare-all",
             "private-verification.log",
         )
@@ -84,6 +86,11 @@ class RepositoryPolicyTest(unittest.TestCase):
             "permissions: {}",
             "bubblewrap=0.9.0-1ubuntu0.1",
             "sudo --non-interactive /usr/bin/bwrap",
+            'probe_dir="$(mktemp -d)"',
+            'sudo chgrp 0 "$probe_dir"',
+            'chmod 0750 "$probe_dir"',
+            '--ro-bind "$probe_dir" /workspace',
+            "/workspace/verify",
             "--unshare-all",
             "--unshare-net",
         )

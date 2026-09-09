@@ -49,11 +49,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          probe_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "$probe_dir"
+          }
+          trap cleanup EXIT
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            'test -r /workspace/probe' \
+            > "$probe_dir/verify"
+          printf '%s\n' 'runner-owned-bind-probe' > "$probe_dir/probe"
+          chmod 0755 "$probe_dir/verify"
+          test "$(stat -c '%a' "$probe_dir")" = "700"
+          sudo chgrp 0 "$probe_dir"
+          chmod 0750 "$probe_dir"
           sudo --non-interactive /usr/bin/bwrap \
             --unshare-all \
             --unshare-net \
             --die-with-parent \
             --new-session \
+            --ro-bind "$probe_dir" /workspace \
             --ro-bind /usr /usr \
             --ro-bind /bin /bin \
             --ro-bind /lib /lib \
@@ -61,6 +77,7 @@ jobs:
             --proc /proc \
             --dev /dev \
             --tmpfs /tmp \
+            --chdir /workspace \
             --setenv HOME /tmp \
             --setenv PATH /usr/bin:/bin \
-            /bin/true
+            /workspace/verify

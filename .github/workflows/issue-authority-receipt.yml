@@ -255,6 +255,8 @@ jobs:
             echo "private verification entrypoint is unavailable" >&2
             exit 1
           fi
+          sudo chgrp 0 "$source_dir"
+          chmod 0750 "$source_dir"
           if ! sudo --non-interactive /usr/bin/bwrap \
             --unshare-all \
             --unshare-net \
