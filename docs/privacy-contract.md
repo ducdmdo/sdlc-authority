@@ -33,11 +33,19 @@ The nonce must be fresh for each request. Private consumers retain accepted
 nonces and reject reuse. The policy commitment binds the complete canonical
 private evidence bundle that the human reviewed.
 
-Four protected-environment secrets are permitted only inside the isolated
+Six protected-environment secrets are permitted only inside the isolated
 verification job: `SOURCE_REPOSITORY`, `SOURCE_REVISION`, a read-only
-`SOURCE_DEPLOY_KEY`, and `SOURCE_COMMITMENT_SALT`. They are never passed to
+`SOURCE_DEPLOY_KEY`, `SOURCE_COMMITMENT_SALT`, `SOURCE_REVIEW_PACKAGE`, and
+`SOURCE_INDEPENDENT_VERIFIER`. They are never passed to
 receipt steps, written to an artifact, printed, or exposed as workflow inputs.
 The deploy key and salt are deleted or unset before private code executes.
+The package and verifier are supplied by the owner from a separate trust
+plane, never fetched from the candidate revision. They exist transiently in
+separate runner directories. The independent verifier receives the reviewed
+package without credentials, recomputes exact bindings from the read-only
+source, and writes only a bounded private proof into its output directory.
+The candidate entrypoint receives neither review package nor private suite.
+Both sandboxes clear the inherited environment. No private proof is uploaded.
 
 ## Logging rule
 

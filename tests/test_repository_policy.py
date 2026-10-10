@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -10,6 +12,52 @@ PINNED_ACTION = re.compile(r"uses:\s+[^\s@]+@[0-9a-f]{40}(?:\s+#.*)?$")
 
 
 class RepositoryPolicyTest(unittest.TestCase):
+    def test_every_run_block_parses_as_shell(self) -> None:
+        for path in WORKFLOWS.glob("*.yml"):
+            workflow = path.read_text()
+            blocks = re.findall(r"(?m)^        run: \|\n"
+                r"((?:          .*\n|\n)+)", workflow)
+            for block in blocks:
+                result = subprocess.run(["bash", "-n"],
+                    input=textwrap.dedent(block), text=True,
+                    capture_output=True)
+                self.assertEqual(result.returncode, 0,
+                                 (path.name, result.stderr))
+
+    def test_review_package_and_independent_proof_block_issuance(self) -> None:
+        workflow = (WORKFLOWS / "issue-authority-receipt.yml").read_text()
+        private = workflow.split("Verify exact private source", 1)[1].split(
+            "Reconstruct and validate opaque request", 1)[0]
+        required = (
+            "SOURCE_REVIEW_PACKAGE: ${{ secrets.SOURCE_REVIEW_PACKAGE }}",
+            "SOURCE_INDEPENDENT_VERIFIER: "
+            "${{ secrets.SOURCE_INDEPENDENT_VERIFIER }}",
+            "python3 scripts/private_review.py prepare",
+            "scripts/private_review.py proof",
+            '--ro-bind "$review_dir" /review',
+            '--bind "$proof_dir" /proof',
+            "/usr/bin/python3 /review/verify.py",
+            "--clearenv",
+            "unset SOURCE_REVIEW_PACKAGE SOURCE_INDEPENDENT_VERIFIER",
+        )
+        for item in required:
+            with self.subTest(item=item):
+                self.assertIn(item, private)
+        self.assertLess(private.index("private_review.py prepare"),
+                        private.index("unset SOURCE_DEPLOY_KEY"))
+        self.assertLess(private.index("unset SOURCE_REVIEW_PACKAGE"),
+                        private.index("/review/verify.py"))
+        self.assertLess(private.index("private_review.py proof"),
+                        private.index("/workspace/.sdlc-authority/verify"))
+        candidate = private.split("private_review.py proof", 1)[1]
+        self.assertNotIn("--ro-bind \"$review_dir\"", candidate)
+        self.assertNotIn("--bind \"$proof_dir\"", candidate)
+        self.assertNotIn("continue-on-error", workflow)
+        self.assertNotIn("always()", workflow)
+        self.assertEqual(private.count("--clearenv"), 2)
+        self.assertEqual(private.count("--unshare-net"), 2)
+        self.assertEqual(private.count("timeout 240"), 2)
+
     def test_all_actions_are_pinned_to_full_commit(self) -> None:
         for workflow in WORKFLOWS.glob("*.yml"):
             uses_lines = [
