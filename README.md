@@ -21,7 +21,8 @@ verification.
 - Artifact retention: one day
 - Artifact authenticity: GitHub artifact attestation
 - Shared application secrets: none
-- Protected credentials: a read-only deploy key, source target, and privacy salt
+- Protected credentials: a read-only deploy key, source target, privacy salt,
+  owner-reviewed package, and independent verifier
 
 The public decision does not reveal what was reviewed. Consumers independently
 calculate the same subject and policy commitments, then require an exact match.
@@ -40,10 +41,16 @@ repository, and environment.
    protected `main`, and wait at `human-approval`.
 4. The repository owner reviews the private evidence outside this repository
    and approves or rejects the environment deployment.
-5. After approval, a secret-backed job fetches one exact source revision,
-   checks its salted opaque commitment, removes its credential, and runs the
-   fixed `.sdlc-authority/verify` entrypoint in a Bubblewrap sandbox without
-   network access. Its output is discarded.
+5. After approval, a secret-backed job fetches one exact source revision and
+   checks both salted commitments against the privately provisioned package.
+   It checks the five source coordinates and stage, protected changes when
+   present, and execution evidence for higher stages. It removes credentials
+   and runs an owner-provided independent verifier in a separate Bubblewrap
+   sandbox. A fresh challenge, exact bindings, and complete passing counts
+   are required. Activation also requires the committed private suite proof.
+   It then runs the fixed `.sdlc-authority/verify` candidate entrypoint in its
+   own sandbox with no review package or independent verifier mounted.
+   Both sandboxes have no network, clear their environments, and discard logs.
 6. The same approved job produces a canonical JSON decision, validates it,
    uploads it for one day, and creates a GitHub artifact attestation.
 
@@ -51,15 +58,20 @@ The final approval workflow must not be dispatched until the exact private
 commitment has been independently reviewed.
 
 The protected environment must define `SOURCE_REPOSITORY`, `SOURCE_REVISION`,
-`SOURCE_DEPLOY_KEY`, and `SOURCE_COMMITMENT_SALT`. These values are never public
-inputs. The subject commitment is SHA-256 over a versioned, null-delimited
+`SOURCE_DEPLOY_KEY`, `SOURCE_COMMITMENT_SALT`, `SOURCE_REVIEW_PACKAGE`, and
+`SOURCE_INDEPENDENT_VERIFIER`. These values are never public inputs.
+The subject commitment is SHA-256 over a versioned, null-delimited
 preimage containing the random salt, canonical source target, and exact source
 revision. The private trust plane must calculate it with the same contract.
 
-The policy commitment is the SHA-256 commitment of the complete canonical
-private evidence bundle reviewed by the human. The bundle and its preimage
-remain private. The public authority preserves that commitment byte-for-byte
-in the accepted decision.
+The policy commitment is SHA-256 over the consumer's private protocol domain,
+a null byte, the salt, a null byte, and the canonical `policyBundle` object.
+Canonical JSON sorts keys, uses UTF-8 without ASCII escaping, and omits
+whitespace. The salt is exactly 64 lowercase hexadecimal ASCII bytes, used
+as bytes without hex decoding. Both bundle copies of `requirementBindings`
+must match. The owner supplies the consumer's exact domain privately; this
+repository does not name or encode a private consumer protocol identity.
+The preimage remains private and the decision preserves its commitment.
 
 ```text
 SHA256(
@@ -70,8 +82,13 @@ SHA256(
 )
 ```
 
-The job fails closed when a secret, Bubblewrap, the fixed entrypoint, or any
-verification condition is unavailable.
+The job fails closed when a secret, independent verifier/proof, Bubblewrap,
+fixed entrypoint, or any verification condition is unavailable.
+
+This engineering candidate is not installed or activated. See the
+[owner provisioning contract](docs/owner-provisioning.md) for the exact pending
+private actions. Public contract fixtures test rejection behavior; they do
+not provide independent review authority or a private acceptance suite.
 
 ## Local verification
 

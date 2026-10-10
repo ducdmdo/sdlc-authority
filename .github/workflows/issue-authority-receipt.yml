@@ -183,15 +183,20 @@ jobs:
           SOURCE_REVISION: ${{ secrets.SOURCE_REVISION }}
           SOURCE_DEPLOY_KEY: ${{ secrets.SOURCE_DEPLOY_KEY }}
           SOURCE_COMMITMENT_SALT: ${{ secrets.SOURCE_COMMITMENT_SALT }}
+          SOURCE_REVIEW_PACKAGE: ${{ secrets.SOURCE_REVIEW_PACKAGE }}
+          SOURCE_INDEPENDENT_VERIFIER: ${{ secrets.SOURCE_INDEPENDENT_VERIFIER }}
           SUBJECT_COMMITMENT: ${{ github.event.client_payload.subject_commitment }}
         run: |
           set -euo pipefail
           source_dir="$(mktemp -d)"
           credential_dir="$(mktemp -d)"
+          review_dir="$(mktemp -d)"
+          proof_dir="$(mktemp -d)"
           private_log="$RUNNER_TEMP/private-verification.log"
           cleanup() {
             rm -f "$private_log"
-            rm -rf "$source_dir" "$credential_dir"
+            sudo rm -rf "$source_dir" "$credential_dir" \
+              "$review_dir" "$proof_dir"
           }
           trap cleanup EXIT
           python3 - <<'PY'
@@ -209,7 +214,9 @@ jobs:
               re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
               and re.fullmatch(r"[0-9a-f]{40}", revision)
               and "PRIVATE KEY" in deploy_key
-              and 32 <= len(salt) <= 256
+              and re.fullmatch(r"[0-9a-f]{64}", salt)
+              and os.environ.get("SOURCE_REVIEW_PACKAGE")
+              and os.environ.get("SOURCE_INDEPENDENT_VERIFIER")
           )
           if not valid:
               raise SystemExit("private verification configuration is invalid")
@@ -248,20 +255,66 @@ jobs:
             echo "private verification revision mismatch" >&2
             exit 1
           fi
+          if ! python3 scripts/private_review.py prepare \
+            --request authority-request.json \
+            --source "$source_dir" \
+            --private-dir "$review_dir" >>"$private_log" 2>&1; then
+            echo "private review rejected" >&2
+            exit 1
+          fi
           rm -f "$key_file" "$known_hosts"
           unset SOURCE_DEPLOY_KEY SOURCE_COMMITMENT_SALT GIT_SSH_COMMAND
           unset SOURCE_REPOSITORY SOURCE_REVISION
+          unset SOURCE_REVIEW_PACKAGE SOURCE_INDEPENDENT_VERIFIER
           if [ ! -x "$source_dir/.sdlc-authority/verify" ]; then
             echo "private verification entrypoint is unavailable" >&2
             exit 1
           fi
           sudo chgrp 0 "$source_dir"
           chmod 0750 "$source_dir"
+          sudo chgrp 0 "$review_dir" "$proof_dir"
+          chmod 0750 "$review_dir"
+          chmod 0770 "$proof_dir"
+          challenge="$(<"$review_dir/challenge")"
           if ! sudo --non-interactive /usr/bin/bwrap \
             --unshare-all \
             --unshare-net \
             --die-with-parent \
             --new-session \
+            --clearenv \
+            --ro-bind "$source_dir" /workspace \
+            --ro-bind "$review_dir" /review \
+            --bind "$proof_dir" /proof \
+            --ro-bind /usr /usr \
+            --ro-bind /bin /bin \
+            --ro-bind /lib /lib \
+            --ro-bind-try /lib64 /lib64 \
+            --proc /proc \
+            --dev /dev \
+            --tmpfs /tmp \
+            --chdir /review \
+            --setenv HOME /tmp \
+            --setenv PATH /usr/bin:/bin \
+            /usr/bin/timeout 240 /usr/bin/python3 /review/verify.py \
+              --review /review/review.json \
+              --challenge "$challenge" \
+              --output /proof/proof.json >>"$private_log" 2>&1; then
+            echo "independent private verification failed" >&2
+            exit 1
+          fi
+          if ! sudo --non-interactive /usr/bin/python3 \
+            scripts/private_review.py proof \
+            --private-dir "$review_dir" --proof "$proof_dir/proof.json" \
+            >>"$private_log" 2>&1; then
+            echo "independent private proof rejected" >&2
+            exit 1
+          fi
+          if ! sudo --non-interactive /usr/bin/bwrap \
+            --unshare-all \
+            --unshare-net \
+            --die-with-parent \
+            --new-session \
+            --clearenv \
             --ro-bind "$source_dir" /workspace \
             --ro-bind /usr /usr \
             --ro-bind /bin /bin \
@@ -273,7 +326,7 @@ jobs:
             --chdir /workspace \
             --setenv HOME /tmp \
             --setenv PATH /usr/bin:/bin \
-            /workspace/.sdlc-authority/verify \
+            /usr/bin/timeout 240 /workspace/.sdlc-authority/verify \
             >"$private_log" 2>&1; then
             echo "private verification failed" >&2
             exit 1
