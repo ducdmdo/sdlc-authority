@@ -85,6 +85,22 @@ SHA256(
 The job fails closed when a secret, independent verifier/proof, Bubblewrap,
 fixed entrypoint, or any verification condition is unavailable.
 
+## Solo-owner deployment review
+
+The owner approved solo development review on 2026-10-11. The
+`human-approval` environment retains `ducdmdo` as its required reviewer,
+protected-branch-only deployment and disabled administrator bypass. It permits
+the owner to approve a deployment they initiated. The workflow requires this
+exact configuration and an actual approved review event for its current run.
+It still rejects missing approval, a different reviewer or environment,
+administrator bypass and unprotected branches.
+
+This is an owner review, not an independent second-person review. GitHub does
+not permit PR authors to approve their own PRs. Changing mandatory PR approval
+counts is a separate repository-policy decision; this workflow change does not
+grant a PR approval or change branch protection. Private verification and
+attestation remain required. No launch or consumer activation is granted.
+
 This engineering candidate is not installed or activated. See the
 [owner provisioning contract](docs/owner-provisioning.md) for the exact pending
 private actions. Public contract fixtures test rejection behavior; they do
