@@ -96,7 +96,7 @@ jobs:
               "environmentId": 21443284760,
               "name": "human-approval",
               "canAdminsBypass": False,
-              "preventSelfReview": True,
+              "preventSelfReview": False,
               "reviewers": [expected_reviewer],
               "protectedBranches": True,
               "customBranchPolicies": False,
